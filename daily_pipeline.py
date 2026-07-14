@@ -26,7 +26,7 @@ def clean_and_sync():
     
     if sitrep_files:
         for file_path in sitrep_files:
-            # Dynamically derive table name from filename (e.g., insp_sitrep__new_confirmed_cases__daily -> insp_sitrep_new_confirmed_cases_daily)
+            # Dynamically derive table name from filename
             filename = os.path.basename(file_path).replace(".csv", "").lower()
             table_name = filename.replace("__", "_")
             
@@ -35,14 +35,19 @@ def clean_and_sync():
             df = pd.read_csv(file_path)
             df.columns = df.columns.str.lower().str.strip()
             
-            # Clean health zone names if the column is present
+            # Clean health zone names if present
             zone_cols = [c for c in df.columns if 'zone' in c or 'nom' in c]
             if zone_cols:
                 df[zone_cols[0]] = df[zone_cols[0]].astype(str).str.strip().str.title()
             
-            # Standardize dates if present
+            # Standardize and sanitize dates
             if 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date'])
+                # Remove brackets, quotes, or trailing spaces from the date string
+                df['date'] = df['date'].astype(str).str.replace(r'[\[\]\'"\s]', '', regex=True)
+                
+                # Convert to datetime, coercing invalid entries to NaT instead of crashing
+                df['date'] = pd.to_datetime(df['date'], errors='coerce')
+                
                 if zone_cols:
                     df = df.sort_values(by=[zone_cols[0], 'date'])
 
