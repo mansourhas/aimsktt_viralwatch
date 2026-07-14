@@ -1,4 +1,5 @@
 import os
+import glob
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine
@@ -11,63 +12,45 @@ if DATABASE_URL:
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     engine = create_engine(DATABASE_URL)
-    print("Connected successfully to your Cloud Aiven PostgreSQL database!")
+    print("🔌 Connected successfully to your Cloud Aiven PostgreSQL database!")
 else:
     engine = create_engine("sqlite:///data_test/viralwatch.db")
-    print("DATABASE_URL not found. Saving locally to data_test/viralwatch.db.")
+    print("📁 DATABASE_URL not found. Saving locally to data_test/viralwatch.db.")
 
 def clean_and_sync():
-    print("Starting data cleaning and transformation...")
+    print("🧹 Starting data cleaning and transformation...")
     
-    # --- Table 1: Case Data & Rt Proxy ---
-    cases_path = "data_test/BDBV2026_Cases_HA.csv"
-    if os.path.exists(cases_path):
-        df_cases = pd.read_csv(cases_path)
-        
-        # Clean columns and dates
-        df_cases['date'] = pd.to_datetime(df_cases['date'])
-        df_cases['health_zone'] = df_cases['health_zone'].str.strip().str.title()
-        df_cases = df_cases.sort_values(by=['health_zone', 'date'])
-        
-        # Handle real-world downward case revisions
-        df_cases['cumulative_cases'] = df_cases.groupby('health_zone')['cumulative_cases'].cummax()
-        
-        # Calculate Rolling 7-Day differences
-        df_cases['new_cases_7d'] = df_cases.groupby('health_zone')['cumulative_cases'].diff(periods=7).fillna(0)
-        df_cases['prev_cases_7d'] = df_cases.groupby('health_zone')['new_cases_7d'].shift(7).fillna(0)
-        
-        # Calculate Rt Proxy
-        df_cases['rt_proxy'] = np.where(
-            df_cases['prev_cases_7d'] > 0, 
-            df_cases['new_cases_7d'] / df_cases['prev_cases_7d'], 
-            0.0
-        )
-        
-        # DB INSERTION 1: write to 'epidemic_trends'
-        df_cases.to_sql('epidemic_trends', engine, if_exists='replace', index=False)
-        print("✔ 'epidemic_trends' table written/updated in the database.")
-    else:
-        print("❌ Error: BDBV2026_Cases_HA.csv not found in data_test/")
-
-    # --- Table 2: Static Covariates (IDP, CCVI, Mobility) ---
-    covariate_files = {
-        "idp_displacement.csv": "idp_displacement",
-        "ccvi_vulnerability_index.csv": "ccvi_vulnerability",
-        "flowminder_mobility.csv": "mobility_flows"
-    }
-
-    for csv_name, target_table in covariate_files.items():
-        file_path = os.path.join("data_test", csv_name)
-        if os.path.exists(file_path):
-            df_cov = pd.read_csv(file_path)
-            if 'health_zone' in df_cov.columns:
-                df_cov['health_zone'] = df_cov['health_zone'].str.strip().str.title()
+    # --- Target: Only INSP SitRep Processed Files ---
+    search_path = os.path.join("data_test", "*insp_sitrep*.csv")
+    sitrep_files = glob.glob(search_path)
+    
+    if sitrep_files:
+        for file_path in sitrep_files:
+            # Dynamically derive table name from filename (e.g., insp_sitrep__new_confirmed_cases__daily -> insp_sitrep_new_confirmed_cases_daily)
+            filename = os.path.basename(file_path).replace(".csv", "").lower()
+            table_name = filename.replace("__", "_")
             
-            # DB INSERTION 2: write to static tables
-            df_cov.to_sql(target_table, engine, if_exists='replace', index=False)
-            print(f"✔ '{target_table}' table written/updated in the database.")
-        else:
-            print(f"⚠️ Warning: {csv_name} not found in data_test/. Skipping table '{target_table}'.")
+            print(f"📦 Processing SitRep file: {file_path} -> Database Table: '{table_name}'")
+            
+            df = pd.read_csv(file_path)
+            df.columns = df.columns.str.lower().str.strip()
+            
+            # Clean health zone names if the column is present
+            zone_cols = [c for c in df.columns if 'zone' in c or 'nom' in c]
+            if zone_cols:
+                df[zone_cols[0]] = df[zone_cols[0]].astype(str).str.strip().str.title()
+            
+            # Standardize dates if present
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+                if zone_cols:
+                    df = df.sort_values(by=[zone_cols[0], 'date'])
+
+            # DB INSERTION: Write the sitrep data to its dynamic table
+            df.to_sql(table_name, engine, if_exists='replace', index=False)
+            print(f"✔ '{table_name}' table written/updated in the database.")
+    else:
+        print("❌ Error: No CSV files matching '*insp_sitrep*.csv' found in data_test/")
 
     print("🎉 Ingestion & Database sync complete!")
 
