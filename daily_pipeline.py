@@ -17,24 +17,31 @@ else:
     engine = create_engine("sqlite:///data_test/viralwatch.db")
     print("📁 DATABASE_URL not found. Saving locally to data_test/viralwatch.db.")
 
-def reorder_columns(df):
+ddef reorder_columns(df):
     """
     Reorders a DataFrame to guarantee:
-    1st: Nom/Geographic Keys (health_zone, province)
+    1st: Nom/Geographic Keys (health_zone, province, nom, zone, etc.)
     2nd: Count data (columns containing 'count')
     3rd: Density data (columns containing 'density')
     """
     cols = list(df.columns)
     
-    # Identify and categorize columns
-    key_cols = [c for c in cols if c in ['health_zone', 'province']]
+    # Identify geographic keys dynamically (including variations of 'nom' and 'zone')
+    key_cols = [
+        c for c in cols 
+        if c in ['health_zone', 'province', 'nom', 'zone', 'nom_zone'] 
+        or 'zone' in c 
+        or 'province' in c
+    ]
+    
+    # Categorize count and density columns (excluding keys)
     count_cols = [c for c in cols if 'count' in c and c not in key_cols]
     density_cols = [c for c in cols if 'density' in c and c not in key_cols]
     
     # Any other remaining columns
     other_cols = [c for c in cols if c not in key_cols and c not in count_cols and c not in density_cols]
     
-    # Construct strictly ordered column list
+    # Re-assemble strictly: [Keys/Names] -> [Counts] -> [Densities] -> [Others]
     ordered_cols = key_cols + count_cols + density_cols + other_cols
     return df[ordered_cols]
 
