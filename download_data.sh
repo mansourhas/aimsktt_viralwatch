@@ -4,31 +4,44 @@ set -e
 REPO_URL="https://github.com/INRB-UMIE/BDBV2026-Data.git"
 REPO_DIR="BDBV2026-Data"
 
-echo "🧹 Preparing local directories..."
+echo "🧹 Preparing local data_test directory..."
 rm -rf data_test
 mkdir -p data_test
 
 echo "🚀 Cloning BDBV2026-Data Repository..."
 rm -rf "$REPO_DIR"
-git clone "$REPO_URL"
+git clone --depth 1 "$REPO_URL"
 
-echo "🎯 Harvesting only PROCESSED INSP SitRep data..."
-# This finds files specifically inside the insp_sitrep processed folder and copies them
-TARGET_DIR="$REPO_DIR/data/insp_sitrep/processed"
+echo "🎯 Collecting requested datasets..."
 
-if [ -d "$TARGET_DIR" ]; then
-    echo "✔ Found processed directory. Copying CSVs..."
-    find "$TARGET_DIR" -name "*.csv" -exec cp {} data_test/ \;
-else
-    echo "⚠️ Target directory $TARGET_DIR not found. Searching fallback..."
-    find "$REPO_DIR" -path "*/insp_sitrep/processed/*.csv" -exec cp {} data_test/ \;
+# 1. Copy targeted files from build/
+if [ -d "$REPO_DIR/build" ]; then
+    echo "Processing build artifacts..."
+    # Copy files matching: insp*, epi_cases*, worldpop_*, OSRM_*, cross_border*, flowminder_short*, grid3_healthsites*
+    find "$REPO_DIR/build" -type f \( \
+        -iname "insp*" -o \
+        -iname "epi_cases*" -o \
+        -iname "worldpop_*" -o \
+        -iname "OSRM_*" -o \
+        -iname "cross_border*" -o \
+        -iname "flowminder_short*" -o \
+        -iname "grid3_healthsites*" \
+    \) -exec cp {} data_test/ \;
 fi
 
-# Final validation
-FINAL_COUNT=$(ls -1 data_test/*.csv 2>/dev/null | wc -l)
-if [ "$FINAL_COUNT" -gt 0 ]; then
-    echo "✔ Clean copy complete! $FINAL_COUNT processed INSP SitRep CSVs loaded into data_test/."
+# 2. Extract Shapefiles from data/ directory
+SHP_DIR="$REPO_DIR/data/shapefiles"
+if [ -d "$SHP_DIR" ]; then
+    echo "🌎 Extracting geographical shapefiles..."
+    # Copy all shapefile components (.shp, .shx, .dbf, .prj)
+    cp "$SHP_DIR"/DRC_Health_zones.* data_test/ 2>/dev/null || cp "$SHP_DIR"/* data_test/ 2>/dev/null
 else
-    echo "❌ ERROR: No processed CSV files found for insp_sitrep." >&2
-    exit 1
+    # Search recursively in data/ if path differs
+    find "$REPO_DIR/data" -type f \( -name "*.shp" -o -name "*.shx" -o -name "*.dbf" -o -name "*.prj" \) -exec cp {} data_test/ \;
 fi
+
+# Clean up cloned repository
+rm -rf "$REPO_DIR"
+
+echo "🎉 All selected datasets have been harvested into data_test/!"
+ls -l data_test/
