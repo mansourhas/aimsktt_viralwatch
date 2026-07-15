@@ -34,6 +34,9 @@ def clean_and_sync():
     all_files = glob.glob(os.path.join("data_test", "*"))
     processed_count = 0
     
+    # Dictionary structures to store WorldPop dataframes temporarily
+    worldpop_dfs = {"count": None, "density": None}
+    
     for file_path in all_files:
         filename = os.path.basename(file_path)
         name_lower = filename.lower()
@@ -64,6 +67,39 @@ def clean_and_sync():
         if any(name_lower.endswith(ext) for ext in [".shx", ".dbf", ".prj", ".cpg"]):
             continue
 
+        # Dynamic Route: Handle WorldPop files differently by merging them into one
+        if name_lower.startswith("worldpop_"):
+            try:
+                print(f"🌍 Reading WorldPop Component: '{filename}'")
+                raw_df = pd.read_csv(file_path)
+                processed_df = clean_dataframe(raw_df)
+                
+                # Determine metric column name in the raw dataframe (typically "value" or numeric)
+                metric_col = next((col for col in processed_df.columns if col in ['value', 'cases', 'confirmed_cases']), None)
+                if not metric_col:
+                    # Fallback to the last column if it's numeric
+                    metric_col = processed_df.select_dtypes(include=['number']).columns[-1]
+
+                # Identify joining keys
+                join_keys = [col for col in ['health_zone', 'province'] if col in processed_df.columns]
+                if not join_keys:
+                    join_keys = [processed_df.columns[0]] # fallback to first column
+                
+                # Reshape to build unified keys and extract specific column
+                subset_df = processed_df[join_keys + [metric_col]].copy()
+                
+                if "density" in name_lower:
+                    subset_df = subset_df.rename(columns={metric_col: "density"})
+                    worldpop_dfs["density"] = subset_df
+                else:
+                    subset_df = subset_df.rename(columns={metric_col: "count"})
+                    worldpop_dfs["count"] = subset_df
+                
+                continue # Skip standard DB save for the raw segment
+            except Exception as e:
+                print(f"❌ Failed to extract WorldPop segment '{filename}': {e}")
+                continue
+
         print(f"📦 Re-building Table: '{clean_name}' from raw file...")
         
         try:
@@ -73,15 +109,41 @@ def clean_and_sync():
                 raw_df = pd.read_csv(file_path)
                 processed_df = clean_dataframe(raw_df)
             
-            # Save to database
+            # Save normal table to database
             processed_df.to_sql(clean_name, engine, if_exists='replace', index=False)
             print(f"✔ Table '{clean_name}' completely replaced.")
             processed_count += 1
             
         except Exception as e:
             print(f"❌ Failed to process '{filename}': {e}")
+
+    # ==========================================
+    # Dynamic Join: Process & Merge WorldPop
+    # ==========================================
+    if worldpop_dfs["count"] is not None or worldpop_dfs["density"] is not None:
+        try:
+            print("🔗 Merging WorldPop Count and Density dataframes...")
             
-    print(f"🎉 Complete! All previous tables cleared; {processed_count} tables deployed successfully.")
+            if worldpop_dfs["count"] is not None and worldpop_dfs["density"] is not None:
+                # Find matching keys present in both tables
+                keys_count = [c for c in worldpop_dfs["count"].columns if c != "count"]
+                keys_density = [c for c in worldpop_dfs["density"].columns if c != "density"]
+                common_keys = list(set(keys_count).intersection(keys_density))
+                
+                merged_worldpop = pd.merge(worldpop_dfs["count"], worldpop_dfs["density"], on=common_keys, how="outer")
+            else:
+                # Use whichever single component is available
+                merged_worldpop = worldpop_dfs["count"] if worldpop_dfs["count"] is not None else worldpop_dfs["density"]
+            
+            # Write unified WorldPop table to Database
+            merged_worldpop.to_sql("worldpop_combined", engine, if_exists='replace', index=False)
+            print("✔ Table 'worldpop_combined' successfully built and replaced.")
+            processed_count += 1
+            
+        except Exception as e:
+            print(f"❌ Failed to join and write combined WorldPop table: {e}")
+            
+    print(f"🎉 Complete! All previous tables cleared; {processed_count} unified tables deployed successfully.")
 
 if __name__ == "__main__":
     clean_and_sync()
