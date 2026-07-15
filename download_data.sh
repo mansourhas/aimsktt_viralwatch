@@ -17,7 +17,6 @@ echo "🎯 Collecting requested datasets..."
 # 1. Copy targeted files from build/
 if [ -d "$REPO_DIR/build" ]; then
     echo "Processing build artifacts..."
-    # Copy files matching: insp*, epi_cases*, worldpop_*, OSRM_*, cross_border*, flowminder_short*, grid3_healthsites*
     find "$REPO_DIR/build" -type f \( \
         -iname "insp*" -o \
         -iname "epi_cases*" -o \
@@ -33,15 +32,18 @@ fi
 SHP_DIR="$REPO_DIR/data/shapefiles"
 if [ -d "$SHP_DIR" ]; then
     echo "🌎 Extracting geographical shapefiles..."
-    # Copy all shapefile components (.shp, .shx, .dbf, .prj)
     cp "$SHP_DIR"/DRC_Health_zones.* data_test/ 2>/dev/null || cp "$SHP_DIR"/* data_test/ 2>/dev/null
 else
-    # Search recursively in data/ if path differs
     find "$REPO_DIR/data" -type f \( -name "*.shp" -o -name "*.shx" -o -name "*.dbf" -o -name "*.prj" \) -exec cp {} data_test/ \;
 fi
+
+# 3. Harvest Aliases files from data/ root
+echo "🔍 Extracting entity alias lookup files..."
+cp "$REPO_DIR/data/aliases.csv" data_test/ 2>/dev/null || echo "⚠️ Check: aliases.csv not in data root"
+cp "$REPO_DIR/data/province_aliases.csv" data_test/ 2>/dev/null || echo "⚠️ Check: province_aliases.csv not in data root"
 
 # Clean up cloned repository
 rm -rf "$REPO_DIR"
 
-echo "🎉 All selected datasets have been harvested into data_test/!"
+echo "🎉 All selected datasets + alias registries loaded into data_test/!"
 ls -l data_test/
