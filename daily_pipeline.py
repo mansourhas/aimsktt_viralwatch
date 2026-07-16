@@ -36,7 +36,7 @@ def clean_column_name(col):
 
 def find_dbdv2026_root() -> Path:
     """
-    Scans upwards and downwards from current path to locate 'BDBV2026-Data' directory.
+    Scans upwards and downwards from current path to locate 'BDBV2026-Data' or 'DBDV2026-Data' directory.
     """
     current = Path(".").resolve()
     
@@ -48,7 +48,7 @@ def find_dbdv2026_root() -> Path:
                 return candidate
             
     # Search downwards
-    for candidate_name in ["*BDBV2026-Data", "*DBDV2026-Data"]:
+    for candidate_name in ["*BDBV2026-Data*", "*DBDV2026-Data*"]:
         for path in current.rglob(candidate_name):
             if path.is_dir():
                 return path
@@ -58,14 +58,16 @@ def find_dbdv2026_root() -> Path:
 
 
 def find_path_fallback(target_filename: str, preferred_path: Path) -> Path:
-    """If the target file is not at the preferred path, scan the project directory to find it."""
+    """If the target file is not at the preferred path, scan the entire runner workspace to find it."""
     if preferred_path.exists():
         return preferred_path
     
-    # Deep search workspace
-    for p in Path(".").resolve().rglob(target_filename):
-        return p
-        
+    workspace_root = Path(".").resolve()
+    for parent in [workspace_root] + list(workspace_root.parents):
+        for p in parent.rglob(target_filename):
+            if p.is_file():
+                return p
+                
     return preferred_path
 
 
@@ -88,11 +90,8 @@ def clean_and_sync():
     
     # Direct targeted path to build/matrix/osrm__travel_time__static.matrix.csv
     PREFERRED_OSRM_PATH = bdbv_root / "build/matrix/osrm__travel_time__static.matrix.csv"
-    PREFERRED_ALIASES_PATH = bdbv_root / "data/aliases.csv"
     
-    # Resolve absolute paths with dynamic fallbacks if folders are moved
     OSRM_PATH = find_path_fallback("osrm__travel_time__static.matrix.csv", PREFERRED_OSRM_PATH)
-    ALIASES_PATH = find_path_fallback("aliases.csv", PREFERRED_ALIASES_PATH)
     
     # Locate training window sitrep
     workspace_root = Path(".").resolve()
@@ -103,15 +102,20 @@ def clean_and_sync():
     if not data_dir.exists() or not any(data_dir.iterdir()):
         data_dir = workspace_root
 
-    # --- 1. Custom OSRM Calculation Feature Generation & Upload ---
-    print(f"🔎 OSRM Path: {OSRM_PATH} (Exists: {OSRM_PATH.exists()})")
-    print(f"🔎 Aliases Path: {ALIASES_PATH} (Exists: {ALIASES_PATH.exists()})")
-    print(f"🔎 Sitrep Path: {SITREP_PATH} (Exists: {SITREP_PATH.exists()})")
-    
+    # --- 1. Diagnostic Prints (WHO IS MISSING?) ---
+    osrm_exists = OSRM_PATH.exists()
+    sitrep_exists = SITREP_PATH.exists()
+
+    print("\n--- 🔍 PATH DIAGNOSTICS ---")
+    print(f"1. OSRM Travel Matrix: '{OSRM_PATH}' -> EXISTS: {osrm_exists}")
+    print(f"2. Sitrep CSV File:    '{SITREP_PATH}' -> EXISTS: {sitrep_exists}")
+    print("---------------------------\n")
+
+    # --- 2. Custom OSRM Calculation Feature Generation & Upload ---
     try:
-        if OSRM_PATH.exists() and ALIASES_PATH.exists() and SITREP_PATH.exists():
+        if osrm_exists and sitrep_exists:
             print("🗺️ Running custom OSRM nearest active-zone calculation...")
-            osrm_df = compute_osrm_nearest_active(OSRM_PATH, ALIASES_PATH, SITREP_PATH, OUT_PATH)
+            osrm_df = compute_osrm_nearest_active(OSRM_PATH, SITREP_PATH, OUT_PATH)
             
             # Post-Process for Database Injection (Force 'nom' First)
             osrm_df = clean_dataframe(osrm_df)
@@ -119,14 +123,23 @@ def clean_and_sync():
             osrm_df = force_nom_first(osrm_df)
             
             print(f"📋 'osrm_nearest_active_feature' columns right before SQL: {list(osrm_df.columns)}")
+            
+            # --- 💡 PRINT OUTPUT HEAD ---
+            print("\n📊 PREVIEW OF COMPUTED OSRM FEATURES:")
+            print(osrm_df.head(10).to_string(index=False))
+            print("=====================================\n")
+            
             osrm_df.to_sql("osrm_nearest_active_feature", engine, if_exists='replace', index=False)
             print("✔ Custom table 'osrm_nearest_active_feature' successfully saved in DB!")
         else:
-            print(f"❌ OSRM files or Sitrep missing. Skipped processing.")
+            missing_files = []
+            if not osrm_exists: missing_files.append("OSRM Travel Matrix")
+            if not sitrep_exists: missing_files.append("Sitrep CSV")
+            print(f"❌ Cannot run OSRM script because of missing files: {', '.join(missing_files)}. Skipped processing.")
     except Exception as e:
         print(f"❌ OSRM feature calculation or upload failed: {e}")
 
-    # --- 2. INSP Merge ---
+    # --- 3. INSP Merge ---
     try:
         if len(list(data_dir.glob("insp_sitrep*.csv"))) > 0:
             merged_df = join_insp_sitrep_csvs(input_dir=data_dir, output_path=data_dir / "insp_sitrep_merged.csv")
@@ -139,7 +152,7 @@ def clean_and_sync():
     except Exception as e:
         print(f"❌ INSP upload failed: {e}")
 
-    # --- 3. Flowminder ---
+    # --- 4. Flowminder ---
     try:
         if len(list(data_dir.glob("flowminder*.csv"))) > 0:
             flow_df = join_flowminder_csvs(input_dir=data_dir, output_path=data_dir / "flowminder_merged.csv")
@@ -152,7 +165,7 @@ def clean_and_sync():
     except Exception as e:
         print(f"❌ Flowminder upload failed: {e}")
 
-    # --- 4. WorldPop ---
+    # --- 5. WorldPop ---
     try:
         if len(list(data_dir.glob("*worldpop*.csv"))) > 0:
             wp_df = join_worldpop_csvs(input_dir=data_dir, output_path=data_dir / "worldpop_merged.csv")
@@ -161,7 +174,14 @@ def clean_and_sync():
             wp_df = force_nom_first(wp_df)
             
             print(f"📋 'worldpop_merged' columns right before SQL: {list(wp_df.columns)}")
+            
+            # --- 💡 PRINT OUTPUT HEAD ---
+            print("\n📊 PREVIEW OF MERGED WORLDPOP:")
+            print(wp_df.head(10).to_string(index=False))
+            print("=====================================\n")
+
             wp_df.to_sql("worldpop_merged", engine, if_exists='replace', index=False)
+            print("❌ WorldPop upload failed: {e}")
     except Exception as e:
         print(f"❌ WorldPop upload failed: {e}")
 
