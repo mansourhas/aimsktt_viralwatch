@@ -228,49 +228,72 @@ def join_flowminder_csvs(input_dir: Path | str, output_path: Path | str) -> pd.D
 
 
 def join_worldpop_csvs(input_dir: Path | str, output_path: Path | str) -> pd.DataFrame:
-    """Finds WorldPop files (count and density) and merges them into a wide table."""
+    """
+    Finds WorldPop files (by looking for 'count' and 'density' in the filenames)
+    and merges them into a single wide table (nom, count, density).
+    """
     input_dir = Path(input_dir)
     output_path = Path(output_path)
 
-    csv_files = list(input_dir.glob("*worldpop*.csv"))
+    # Grab all CSV files in the folder
+    all_csvs = list(input_dir.glob("*.csv"))
     
     count_file = None
     density_file = None
 
-    for f in csv_files:
+    # Search explicitly for "count" and "density" in filenames
+    for f in all_csvs:
         name_lower = f.name.lower()
         if "density" in name_lower:
             density_file = f
-        elif "count" in name_lower or "pop" in name_lower:
+        elif "count" in name_lower:
             count_file = f
 
     if not count_file and not density_file:
-        raise FileNotFoundError(f"No WorldPop count or density files found in {input_dir}")
+        raise FileNotFoundError(
+            f"Could not locate WorldPop files in '{input_dir}'. "
+            f"Expected one file with 'count' and one with 'density' in the filename."
+        )
 
-    if count_file:
-        print(f"📈 Reading WorldPop counts from: {count_file.name}")
-        df_count = pd.read_csv(count_file)
-        df_count.columns = df_count.columns.str.lower().str.strip()
-        df_count = df_count.rename(columns={
-            "zone_sante": "nom", "zone_de_sante": "nom", "health_zone": "nom", "nom_zone": "nom",
-            "value": "count", "population": "count"
-        })
-        df_count = df_count[["nom", "count"]].copy()
-    else:
-        df_count = pd.DataFrame(columns=["nom", "count"])
+    def _extract_metric(file_path: Path, metric_name: str) -> pd.DataFrame:
+        df = pd.read_csv(file_path)
+        df.columns = df.columns.str.lower().str.strip()
+        
+        # 1. Detect geography column ('nom' or 'zone')
+        geo_col = None
+        for col in df.columns:
+            if any(k in col for k in ["zone", "nom", "health", "sante"]):
+                geo_col = col
+                break
+        if not geo_col:
+            geo_col = df.columns[0]  # Fallback to 1st column
+            
+        # 2. Detect numeric value column
+        val_col = None
+        for col in df.columns:
+            if col != geo_col and any(k in col for k in ["value", "sum", "pop", "count", "density", "mean"]):
+                val_col = col
+                break
+        if not val_col:
+            remaining = [c for c in df.columns if c != geo_col]
+            val_col = remaining[0] if remaining else None
 
-    if density_file:
-        print(f"📈 Reading WorldPop density from: {density_file.name}")
-        df_density = pd.read_csv(density_file)
-        df_density.columns = df_density.columns.str.lower().str.strip()
-        df_density = df_density.rename(columns={
-            "zone_sante": "nom", "zone_de_sante": "nom", "health_zone": "nom", "nom_zone": "nom",
-            "value": "density"
-        })
-        df_density = df_density[["nom", "density"]].copy()
-    else:
-        df_density = pd.DataFrame(columns=["nom", "density"])
+        # 3. Build standardized DataFrame with clean headers
+        if val_col:
+            df_clean = df[[geo_col, val_col]].copy()
+            df_clean.columns = ["nom", metric_name]
+        else:
+            df_clean = df[[geo_col]].copy()
+            df_clean.columns = ["nom"]
+            df_clean[metric_name] = np.nan
+            
+        return df_clean
 
+    # Safely load the datasets
+    df_count = _extract_metric(count_file, "count") if count_file else pd.DataFrame(columns=["nom", "count"])
+    df_density = _extract_metric(density_file, "density") if density_file else pd.DataFrame(columns=["nom", "density"])
+
+    # Perform outer merge to keep all unique zones with missing (null) values intact
     if not df_count.empty and not df_density.empty:
         merged = pd.merge(df_count, df_density, on="nom", how="outer")
     elif not df_count.empty:
@@ -282,6 +305,6 @@ def join_worldpop_csvs(input_dir: Path | str, output_path: Path | str) -> pd.Dat
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     merged.to_csv(output_path, index=False)
-    print(f"💾 Merged WorldPop table created: {output_path}")
+    print(f"💾 Merged WorldPop table created successfully at: {output_path}")
     
     return merged
