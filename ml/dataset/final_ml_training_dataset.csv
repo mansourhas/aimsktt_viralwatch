@@ -1,4 +1,4 @@
-health_zone,date,Cumulative Confirmed Cases,days_since_first_case,pop_density,travel_time_to_epicenter,target_outbreak_next_7d
+health_zone,date,cumulative_confirmed_cases,days_since_first_case,pop_density,travel_time_to_epicenter,target_outbreak_next_7d
 Aru,22/05/2026,1,0,339.2396335,303.6,0
 Aru,23/05/2026,1,1,339.2396335,303.6,0
 Aru,24/05/2026,1,2,339.2396335,303.6,0
