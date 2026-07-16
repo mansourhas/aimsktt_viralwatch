@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 from data_processing import (
     clean_dataframe,
     join_insp_sitrep_csvs,
+    join_flowminder_csvs,
     compute_osrm_nearest_active,
     clean_and_merge_flowminder,
     merge_worldpop
@@ -26,10 +27,9 @@ DATA_REPO_DIR = Path("BDBV2026-Data")
 BUILD_LONG_DIR = DATA_REPO_DIR / "build" / "long"
 BUILD_DIR = DATA_REPO_DIR / "build"
 
-# Configured paths
+# Configuration Paths
 OSRM_PATH = BUILD_LONG_DIR / "osrm__travel_time.csv"
 ALIASES_PATH = DATA_REPO_DIR / "data" / "aliases.csv"
-FLOWMINDER_PATH = BUILD_DIR / "flowminder_merged.csv"
 WP_COUNT_PATH = BUILD_LONG_DIR / "worldpop__pop_count.csv"
 WP_DENSITY_PATH = BUILD_LONG_DIR / "worldpop__pop_density.csv"
 
@@ -103,17 +103,23 @@ def run_pipeline():
     except Exception as e:
         print(f"❌ OSRM Matrix logic failed: {e}")
 
-    # --- 3. Clean and Merge Flowminder ---
-    print("⏳ Cleaning Flowminder datasets...")
+    # --- 3. Dynamic Merge and Clean Flowminder ---
+    print("⏳ Dynamically compiling and cleaning Flowminder datasets...")
     try:
-        flow_df = clean_and_merge_flowminder(FLOWMINDER_PATH, output_dir / "flowminder_clean.csv")
+        merged_flowminder_path = output_dir / "flowminder_merged.csv"
+        
+        # Build the dynamic merged dataset from local individual files
+        join_flowminder_csvs(BUILD_LONG_DIR, merged_flowminder_path)
+        
+        # Clean and reduce to keeping columns
+        flow_df = clean_and_merge_flowminder(merged_flowminder_path, output_dir / "flowminder_clean.csv")
         
         flow_db = clean_dataframe(flow_df)
         flow_db.columns = [clean_column_name(col) for col in flow_db.columns]
         flow_db.to_sql("flowminder_clean", engine, if_exists="replace", index=False)
-        print("✅ Flowminder Merging Complete!")
+        print("✅ Flowminder dynamic compiler Complete!")
     except Exception as e:
-        print(f"❌ Flowminder processing failed: {e}")
+        print(f"❌ Flowminder dynamic merge failed: {e}")
 
     # --- 4. Merge WorldPop ---
     print("⏳ Compiling WorldPop count and density parameters...")
