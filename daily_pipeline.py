@@ -54,7 +54,7 @@ def clean_and_sync():
         except Exception:
             pass
 
-    # Remote OSRM URL
+    # Remote OSRM RAW URL (Direct web load, no Git LFS needed)
     OSRM_PATH = "https://raw.githubusercontent.com/INRB-UMIE/BDBV2026-Data/main/build/matrix/osrm__travel_time__static.matrix.csv"
     
     workspace_root = Path(".").resolve()
@@ -64,10 +64,8 @@ def clean_and_sync():
     if not data_dir.exists():
         data_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. We look for the input sitrep file directly inside data_test/
+    # Looking for input in data_test/ and saving output features directly inside data_test/
     SITREP_PATH = find_path_fallback("insp_sitrep_training_window.csv", data_dir / "insp_sitrep_training_window.csv")
-    
-    # 2. We save the output features directly inside data_test/
     OUT_PATH = data_dir / "osrm_nearest_active_feature.csv"
 
     # --- 1. Custom OSRM Calculation Feature Generation & DB Upload ---
