@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, text
 
 from data_processing import (
     clean_dataframe,
+    join_insp_sitrep_csvs,
     compute_osrm_nearest_active,
     clean_and_merge_flowminder,
     merge_worldpop
@@ -20,14 +21,17 @@ else:
     engine = create_engine("sqlite:///viralwatch.db")
 
 
-# --- Raw Github Remote Data URLs ---
-RAW_BASE_URL = "https://raw.githubusercontent.com/INRB-UMIE/BDBV2026-Data/main"
-OSRM_URL = f"{RAW_BASE_URL}/build/long/osrm__travel_time.csv"
-ALIASES_URL = f"{RAW_BASE_URL}/data/aliases.csv"
-FLOWMINDER_URL = f"{RAW_BASE_URL}/build/long/flowminder_merged.csv"
-WP_COUNT_URL = f"{RAW_BASE_URL}/build/long/worldpop__pop_count.csv"
-WP_DENSITY_URL = f"{RAW_BASE_URL}/build/long/worldpop__pop_density.csv"
-SITREP_MERGED_URL = f"{RAW_BASE_URL}/build/long/insp_sitrep_merged.csv" # Standard location
+# --- Local Paths to checked out repository files ---
+DATA_REPO_DIR = Path("BDBV2026-Data")
+BUILD_LONG_DIR = DATA_REPO_DIR / "build" / "long"
+BUILD_DIR = DATA_REPO_DIR / "build"
+
+# Configured paths
+OSRM_PATH = BUILD_LONG_DIR / "osrm__travel_time.csv"
+ALIASES_PATH = DATA_REPO_DIR / "data" / "aliases.csv"
+FLOWMINDER_PATH = BUILD_DIR / "flowminder_merged.csv"
+WP_COUNT_PATH = BUILD_LONG_DIR / "worldpop__pop_count.csv"
+WP_DENSITY_PATH = BUILD_LONG_DIR / "worldpop__pop_density.csv"
 
 
 def clean_column_name(col):
@@ -43,8 +47,8 @@ def run_pipeline():
     output_dir = workspace_root / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clean DB Schema on Startup
-    if DATABASE_URL:
+    # Clean DB Schema on Startup (if using a persistent remote DB)
+    if DATABASE_URL and "sqlite" not in DATABASE_URL:
         try:
             with engine.begin() as conn:
                 conn.execute(text("DROP SCHEMA public CASCADE;"))
@@ -53,10 +57,11 @@ def run_pipeline():
         except Exception:
             pass
 
-    # --- 1. Clean INSP Sitreps & Filter Training Window ---
-    print("⏳ Processing INSP Sitrep datasets...")
+    # --- 1. Merge and Clean INSP Sitreps dynamically ---
+    print("⏳ Merging individual INSP Sitrep CSVs...")
     try:
-        raw_sitrep = pd.read_csv(SITREP_MERGED_URL)
+        merged_sitrep_path = output_dir / "insp_sitrep_merged.csv"
+        raw_sitrep = join_insp_sitrep_csvs(BUILD_LONG_DIR, merged_sitrep_path)
         
         # Clean Datatypes / Replace "ND"
         for col in raw_sitrep.columns:
@@ -89,7 +94,7 @@ def run_pipeline():
         out_osrm_path = output_dir / "osrm_nearest_active_feature.csv"
         
         if sitrep_path.exists():
-            osrm_df = compute_osrm_nearest_active(OSRM_URL, ALIASES_URL, sitrep_path, out_osrm_path)
+            osrm_df = compute_osrm_nearest_active(OSRM_PATH, ALIASES_PATH, sitrep_path, out_osrm_path)
             
             osrm_db = clean_dataframe(osrm_df)
             osrm_db.columns = [clean_column_name(col) for col in osrm_db.columns]
@@ -101,7 +106,7 @@ def run_pipeline():
     # --- 3. Clean and Merge Flowminder ---
     print("⏳ Cleaning Flowminder datasets...")
     try:
-        flow_df = clean_and_merge_flowminder(FLOWMINDER_URL, output_dir / "flowminder_clean.csv")
+        flow_df = clean_and_merge_flowminder(FLOWMINDER_PATH, output_dir / "flowminder_clean.csv")
         
         flow_db = clean_dataframe(flow_df)
         flow_db.columns = [clean_column_name(col) for col in flow_db.columns]
@@ -113,7 +118,7 @@ def run_pipeline():
     # --- 4. Merge WorldPop ---
     print("⏳ Compiling WorldPop count and density parameters...")
     try:
-        wp_df = merge_worldpop(WP_COUNT_URL, WP_DENSITY_URL, output_dir / "worldpop_merged.csv")
+        wp_df = merge_worldpop(WP_COUNT_PATH, WP_DENSITY_PATH, output_dir / "worldpop_merged.csv")
         
         wp_db = clean_dataframe(wp_df)
         wp_db.columns = [clean_column_name(col) for col in wp_db.columns]
