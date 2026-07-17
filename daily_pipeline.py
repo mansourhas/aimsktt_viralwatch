@@ -227,21 +227,21 @@ def run_pipeline():
         # A. Execute Processing Flow
         print("   -> Calculating days since initial case benchmark...")
         raw_cases = pd.read_csv(raw_sitrep_filepath, header=None)
-        df_days = calculate_days_since_first_case(raw_cases)[cite: 1]
+        df_days = calculate_days_since_first_case(raw_cases)
         
         print("   -> Parsing spatial density distributions...")
-        df_pop_density = load_population_density(pop_filepath)[cite: 2]
+        df_pop_density = load_population_density(pop_filepath)
         
         print("   -> Evaluating travel metrics relative to Bunia epicenter...")
-        df_travel_time = extract_distance_to_epicenter(matrix_filepath, epicenter_name="Bunia")[cite: 2]
+        df_travel_time = extract_distance_to_epicenter(matrix_filepath, epicenter_name="Bunia")
         
         print("   -> Assembling master model compilation...")
-        df_master = assemble_model_data(df_days, df_pop_density, df_travel_time)[cite: 2]
-        df_target_features = create_target_variable(df_master)[cite: 2]
+        df_master = assemble_model_data(df_days, df_pop_density, df_travel_time)
+        df_target_features = create_target_variable(df_master)
 
         # Save a local CSV mirror backup
         ml_local_backup = output_dir / "model_data_final.csv"
-        df_target_features.to_csv(ml_local_backup, index=False)[cite: 2]
+        df_target_features.to_csv(ml_local_backup, index=False)
 
         # B. Prepare for DB Ingestion
         model_db = df_target_features.copy()
