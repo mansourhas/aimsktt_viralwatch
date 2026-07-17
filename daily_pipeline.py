@@ -49,15 +49,7 @@ def run_pipeline():
     output_dir = workspace_root / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialize Database Schema
-    if DATABASE_URL and "sqlite" not in DATABASE_URL:
-        try:
-            with engine.begin() as conn:
-                conn.execute(text("DROP SCHEMA public CASCADE;"))
-                conn.execute(text("CREATE SCHEMA public;"))
-                conn.execute(text("GRANT ALL ON SCHEMA public TO public;"))
-        except Exception:
-            pass
+    # Note: Global public schema drops are entirely removed to preserve pre-existing database tables and structures.
 
     # --- 1. Compile INSP Sitreps ---
     print("⏳ Compiling INSP Sitreps...")
@@ -110,7 +102,7 @@ def run_pipeline():
     except Exception as e:
         print(f"❌ WorldPop merging failed: {e}")
 
-    # --- 5. Generate and clean Raw and Final SQL Tables ---
+    # --- 5. Generate and Clean ML-Ready Training Table ---
     print("\n⏳ Building training datasets...")
     try:
         sit_p = output_dir / "insp_sitrep_training_window.csv"
@@ -118,26 +110,41 @@ def run_pipeline():
         flow_p = output_dir / "flowminder_clean.csv"
         wp_p = output_dir / "worldpop_merged.csv"
         
-        # A. Join all tables into the raw training_table
-        raw_table_path = output_dir / "training_table.csv"
-        df_raw = create_training_table(sit_p, osrm_p, flow_p, wp_p, raw_table_path)
+        # A. Join all features in memory (saved locally as backup, no 'raw' DB table is written)[cite: 7]
+        raw_table_path = output_dir / "training_table.csv"[cite: 7]
+        df_raw = create_training_table(sit_p, osrm_p, flow_p, wp_p, raw_table_path)[cite: 7]
         
-        raw_db = clean_dataframe(df_raw.copy())
-        raw_db.columns = [clean_column_name(c) for c in raw_db.columns]
-        raw_db.to_sql("training_table_raw", engine, if_exists="replace", index=False)
-        print("💾 Wrote raw training dataset (`training_table_raw`) to SQL database.")
+        # B. Apply feature trimming and missingness handling[cite: 6]
+        df_trimmed = trim_features(df_raw)[cite: 6]
+        df_final = handle_missingness(df_trimmed)[cite: 6]
+        
+        # Save local final output CSV
+        final_table_path = output_dir / "training_table_final.csv"[cite: 6]
+        df_final.to_csv(final_table_path, index=False)[cite: 6]
 
-        # B. Apply feature trimming and missingness handling
-        final_table_path = output_dir / "training_table_final.csv"
-        df_trimmed = trim_features(df_raw)
-        df_final = handle_missingness(df_trimmed)
-        df_final.to_csv(final_table_path, index=False)
-
+        # Prepare DataFrame for SQL ingestion
         final_db = clean_dataframe(df_final.copy())
         final_db.columns = [clean_column_name(c) for c in final_db.columns]
-        final_db.to_sql("training_table_final", engine, if_exists="replace", index=False)
-        print("💾 Wrote ML-ready training dataset (`training_table_final`) to SQL database.")
-        print(f"✅ Success! Training window contains {len(df_final)} fully validated data points.")
+        
+        target_table_name = "training_table_final"
+
+        # C. Secure DB Upload (TRUNCATE & APPEND ONLY)
+        # We run inside engine.begin() to guarantee transactional safety.
+        # This will empty the rows of training_table_final without dropping other tables or altering database schemas.
+        with engine.begin() as conn:
+            print(f"🧹 Truncating existing rows in `{target_table_name}`...")
+            conn.exec_driver_sql(f"TRUNCATE TABLE {target_table_name};")
+            
+            print(f"📥 Appending new clean data to `{target_table_name}`...")
+            final_db.to_sql(
+                name=target_table_name,
+                con=conn,
+                if_exists="append",
+                index=False
+            )
+            
+        print(f"💾 Successfully refreshed data in `{target_table_name}`!")
+        print(f"✅ Success! Active training window contains {len(df_final)} validated data points.")
 
     except Exception as e:
         print(f"❌ Generating training data outputs failed: {e}")
